@@ -1,3 +1,6 @@
+import os
+
+import requests
 from flask.views import MethodView
 from flask_jwt_extended import (
     create_access_token,
@@ -8,27 +11,57 @@ from flask_jwt_extended import (
 )
 from flask_smorest import Blueprint, abort
 from passlib.hash import pbkdf2_sha256
+from sqlalchemy import or_
 
 from blocklist import BLOCKLIST
 from db import db
 from models import UserModel
-from schemas import UserSchema
+from schemas import RegisterUserSchema, UserSchema
 
 blp = Blueprint("Users", __name__, description="User's operations")
 
 
+def send_simple_message(to, subject, body):
+    domain = os.getenv("MAILGUN_DOMAIN")
+    key = os.getenv("MAILGUN_KEY")
+    return requests.post(
+        f"https://api.mailgun.net/v3/{domain}/messages",
+        auth=("api", key),
+        data={
+            "from": f"Excited User <mailgun@{domain}>",
+            "to": [to],
+            "subject": subject,
+            "text": body,
+        },
+    )
+
+
 @blp.route("/register")
 class UserRegister(MethodView):
-    @blp.arguments(UserSchema)
+    @blp.arguments(RegisterUserSchema)
     def post(self, user_data):
-        if UserModel.query.filter(UserModel.username == user_data["username"]).first():
-            abort(409, message="This username is not availiable, try another one")
+        if UserModel.query.filter(
+            or_(
+                UserModel.username == user_data["username"],
+                UserModel.email == user_data["email"],
+            )
+        ).first():
+            abort(
+                409, message="This username or email is not availiable, try another one"
+            )
         user = UserModel(
             username=user_data["username"],
             password=pbkdf2_sha256.hash(user_data["password"]),
+            email=user_data["email"],
         )
         db.session.add(user)
         db.session.commit()
+
+        send_simple_message(
+            user.email,
+            "Successfully signed up",
+            f"Hi {user.username}, Welcome to the app",
+        )
         return {"message": "New User created"}
 
 
